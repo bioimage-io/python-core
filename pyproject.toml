@@ -53,3 +53,6 @@ exclude = [
 
 [tool.coverage.report]
 exclude_also = ["if TYPE_CHECKING:", "assert_never\\("]
+
+[tool.bandit.assert_used]
+skips = ['./tests/']

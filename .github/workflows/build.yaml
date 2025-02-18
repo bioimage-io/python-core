@@ -22,6 +22,15 @@ jobs:
           jupyter: true
           version: "24.3"
 
+  bandit:
+    needs: black
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - name: Perform Bandit Analysis
+        uses: PyCQA/bandit-action@v1
+
   test-spec-conda:
     runs-on: ubuntu-latest
     strategy:
