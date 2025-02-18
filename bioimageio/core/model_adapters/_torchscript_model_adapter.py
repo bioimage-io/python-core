@@ -60,7 +60,7 @@ class TorchscriptModelAdapter(ModelAdapter):
         assert torch is not None
         with torch.no_grad():
             torch_tensor = [
-                None if b is None else torch.from_numpy(b.data.data).to(self.devices[0])
+                None if b is None else torch.from_numpy(b.data.data.astype("float32")).to(self.devices[0])
                 for b in batch
             ]
             _result: Union[  # pyright: ignore[reportUnknownVariableType]
