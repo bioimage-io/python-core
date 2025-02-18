@@ -47,7 +47,7 @@ _ = setup(
     extras_require={
         "pytorch": ["torch>=1.6", "torchvision", "keras>=3.0"],
         "tensorflow": ["tensorflow", "keras>=2.15"],
-        "onnx": ["onnxruntime"],
+        "onnx": ["onnxruntime", "onnx"],
         "dev": [
             "black",
             # "crick",  # currently requires python<=3.9
