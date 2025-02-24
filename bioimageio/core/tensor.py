@@ -186,9 +186,15 @@ class Tensor(MagicTensorOpsMixin):
         return cast(Tuple[AxisId, ...], self._data.dims)
 
     @property
-    def tagged_shape(self):
-        """(alias for `sizes`) Ordered, immutable mapping from axis ids to lengths."""
-        return self.sizes
+    def dtype(self) -> DTypeStr:
+        dt = str(self.data.dtype)  # pyright: ignore[reportUnknownArgumentType]
+        assert dt in get_args(DTypeStr)
+        return dt  # pyright: ignore[reportReturnType]
+
+    @property
+    def ndim(self):
+        """Number of tensor dimensions."""
+        return self._data.ndim
 
     @property
     def shape_tuple(self):
@@ -203,25 +209,20 @@ class Tensor(MagicTensorOpsMixin):
         """
         return self._data.size
 
-    def sum(self, dim: Optional[Union[AxisId, Sequence[AxisId]]] = None) -> Self:
-        """Reduce this Tensor's data by applying sum along some dimension(s)."""
-        return self.__class__.from_xarray(self._data.sum(dim=dim))
-
-    @property
-    def ndim(self):
-        """Number of tensor dimensions."""
-        return self._data.ndim
-
-    @property
-    def dtype(self) -> DTypeStr:
-        dt = str(self.data.dtype)  # pyright: ignore[reportUnknownArgumentType]
-        assert dt in get_args(DTypeStr)
-        return dt  # pyright: ignore[reportReturnType]
-
     @property
     def sizes(self):
         """Ordered, immutable mapping from axis ids to axis lengths."""
         return cast(Mapping[AxisId, int], self.data.sizes)
+
+    @property
+    def tagged_shape(self):
+        """(alias for `sizes`) Ordered, immutable mapping from axis ids to lengths."""
+        return self.sizes
+
+    def argmax(self) -> Mapping[AxisId, int]:
+        ret = self._data.argmax(...)
+        assert isinstance(ret, dict)
+        return {cast(AxisId, k): cast(int, v.item()) for k, v in ret.items()}
 
     def astype(self, dtype: DTypeStr, *, copy: bool = False):
         """Return tensor cast to `dtype`
@@ -282,14 +283,23 @@ class Tensor(MagicTensorOpsMixin):
     def expand_dims(self, dims: Union[Sequence[AxisId], PerAxis[int]]) -> Self:
         return self.__class__.from_xarray(self._data.expand_dims(dims=dims))
 
+    def item(
+        self,
+        key: Union[
+            None, SliceInfo, slice, int, PerAxis[Union[SliceInfo, slice, int]]
+        ] = None,
+    ):
+        """Copy a tensor element to a standard Python scalar and return it."""
+        if key is None:
+            ret = self._data.item()
+        else:
+            ret = self[key]._data.item()
+
+        assert isinstance(ret, (bool, float, int))
+        return ret
+
     def mean(self, dim: Optional[Union[AxisId, Sequence[AxisId]]] = None) -> Self:
         return self.__class__.from_xarray(self._data.mean(dim=dim))
-
-    def std(self, dim: Optional[Union[AxisId, Sequence[AxisId]]] = None) -> Self:
-        return self.__class__.from_xarray(self._data.std(dim=dim))
-
-    def var(self, dim: Optional[Union[AxisId, Sequence[AxisId]]] = None) -> Self:
-        return self.__class__.from_xarray(self._data.var(dim=dim))
 
     def pad(
         self,
@@ -405,6 +415,13 @@ class Tensor(MagicTensorOpsMixin):
 
         return tensor
 
+    def std(self, dim: Optional[Union[AxisId, Sequence[AxisId]]] = None) -> Self:
+        return self.__class__.from_xarray(self._data.std(dim=dim))
+
+    def sum(self, dim: Optional[Union[AxisId, Sequence[AxisId]]] = None) -> Self:
+        """Reduce this Tensor's data by applying sum along some dimension(s)."""
+        return self.__class__.from_xarray(self._data.sum(dim=dim))
+
     def transpose(
         self,
         axes: Sequence[AxisId],
@@ -422,6 +439,9 @@ class Tensor(MagicTensorOpsMixin):
 
         # transpose to the correct axis order
         return self.__class__.from_xarray(array.transpose(*axes))
+
+    def var(self, dim: Optional[Union[AxisId, Sequence[AxisId]]] = None) -> Self:
+        return self.__class__.from_xarray(self._data.var(dim=dim))
 
     @classmethod
     def _interprete_array_wo_known_axes(cls, array: NDArray[Any]):

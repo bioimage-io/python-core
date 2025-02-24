@@ -3,18 +3,21 @@ name: core38
 channels:
   - conda-forge
   - nodefaults
+  - pytorch
 dependencies:
-  - bioimageio.spec>=0.5.3.5
+  - bioimageio.spec>=0.5.3.6
   - black
   - crick # uncommented
-  - filelock
   - h5py
+  - imagecodecs
   - imageio>=2.5
   - jupyter
   - jupyter-black
-  # - keras>=3.0  # removed
+  -  # keras>=3.0,<4 # removed
   - loguru
+  - matplotlib
   - numpy
+  - onnx
   - onnxruntime
   - packaging>=17.0
   - pdoc
@@ -26,13 +29,13 @@ dependencies:
   - pyright
   - pytest
   - pytest-cov
-  - pytest-xdist
   - python=3.8 # changed
-  - pytorch>=2.1
+  - pytorch>=2.1,<3
   - requests
   - rich
   - ruff
   - ruyaml
+  # - tensorflow>=2,<3  removed
   - torchvision
   - tqdm
   - typing-extensions

@@ -15,6 +15,17 @@ from typing_extensions import Self, assert_never
 
 from bioimageio.spec.model import v0_5
 
+from .axis import AxisId
+
+SupportedWeightsFormat = Literal[
+    "keras_hdf5",
+    "onnx",
+    "pytorch_state_dict",
+    "tensorflow_saved_model_bundle",
+    "torchscript",
+]
+
+
 DTypeStr = Literal[
     "bool",
     "float32",
@@ -87,7 +98,19 @@ class SliceInfo(NamedTuple):
 
 
 SampleId = Hashable
+"""ID of a sample, see `bioimageio.core.sample.Sample`"""
 MemberId = v0_5.TensorId
+"""ID of a `Sample` member, see `bioimageio.core.sample.Sample`"""
+
+BlocksizeParameter = Union[
+    v0_5.ParameterizedSize_N,
+    Mapping[Tuple[MemberId, AxisId], v0_5.ParameterizedSize_N],
+]
+"""
+Parameter to determine a concrete size for paramtrized axis sizes defined by
+`bioimageio.spec.model.v0_5.ParameterizedSize`.
+"""
+
 T = TypeVar("T")
 PerMember = Mapping[MemberId, T]
 

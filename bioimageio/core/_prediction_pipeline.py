@@ -15,11 +15,17 @@ from typing import (
 from tqdm import tqdm
 
 from bioimageio.spec.model import AnyModelDescr, v0_4, v0_5
-from bioimageio.spec.model.v0_5 import WeightsFormat
 
 from ._op_base import BlockedOperator
 from .axis import AxisId, PerAxis
-from .common import Halo, MemberId, PerMember, SampleId
+from .common import (
+    BlocksizeParameter,
+    Halo,
+    MemberId,
+    PerMember,
+    SampleId,
+    SupportedWeightsFormat,
+)
 from .digest_spec import (
     get_block_transform,
     get_input_halo,
@@ -43,7 +49,8 @@ Predict_IO = TypeVar(
 class PredictionPipeline:
     """
     Represents model computation including preprocessing and postprocessing
-    Note: Ideally use the PredictionPipeline as a context manager
+    Note: Ideally use the `PredictionPipeline` in a with statement
+        (as a context manager).
     """
 
     def __init__(
@@ -54,13 +61,20 @@ class PredictionPipeline:
         preprocessing: List[Processing],
         postprocessing: List[Processing],
         model_adapter: ModelAdapter,
-        default_ns: Union[
-            v0_5.ParameterizedSize_N,
-            Mapping[Tuple[MemberId, AxisId], v0_5.ParameterizedSize_N],
-        ] = 10,
+        default_ns: Optional[BlocksizeParameter] = None,
+        default_blocksize_parameter: BlocksizeParameter = 10,
         default_batch_size: int = 1,
     ) -> None:
+        """Use `create_prediction_pipeline` to create a `PredictionPipeline`"""
         super().__init__()
+        default_blocksize_parameter = default_ns or default_blocksize_parameter
+        if default_ns is not None:
+            warnings.warn(
+                "Argument `default_ns` is deprecated in favor of"
+                + " `default_blocksize_paramter` and will be removed soon."
+            )
+        del default_ns
+
         if model_description.run_mode:
             warnings.warn(
                 f"Not yet implemented inference for run mode '{model_description.run_mode.name}'"
@@ -88,7 +102,7 @@ class PredictionPipeline:
             )
             self._block_transform = get_block_transform(model_description)
 
-        self._default_ns = default_ns
+        self._default_blocksize_parameter = default_blocksize_parameter
         self._default_batch_size = default_batch_size
 
         self._input_ids = get_member_ids(model_description.inputs)
@@ -121,19 +135,9 @@ class PredictionPipeline:
             self.apply_preprocessing(sample_block)
 
         output_meta = sample_block.get_transformed_meta(self._block_transform)
-        output = output_meta.with_data(
-            {
-                tid: out
-                for tid, out in zip(
-                    self._output_ids,
-                    self._adapter.forward(
-                        *(sample_block.members.get(t) for t in self._input_ids)
-                    ),
-                )
-                if out is not None
-            },
-            stat=sample_block.stat,
-        )
+        local_output = self._adapter.forward(sample_block)
+
+        output = output_meta.with_data(local_output.members, stat=local_output.stat)
         if not skip_postprocessing:
             self.apply_postprocessing(output)
 
@@ -152,20 +156,7 @@ class PredictionPipeline:
         if not skip_preprocessing:
             self.apply_preprocessing(sample)
 
-        output = Sample(
-            members={
-                out_id: out
-                for out_id, out in zip(
-                    self._output_ids,
-                    self._adapter.forward(
-                        *(sample.members.get(in_id) for in_id in self._input_ids)
-                    ),
-                )
-                if out is not None
-            },
-            stat=sample.stat,
-            id=sample.id,
-        )
+        output = self._adapter.forward(sample)
         if not skip_postprocessing:
             self.apply_postprocessing(output)
 
@@ -238,7 +229,7 @@ class PredictionPipeline:
                 + " Consider using `predict_sample_with_fixed_blocking`"
             )
 
-        ns = ns or self._default_ns
+        ns = ns or self._default_blocksize_parameter
         if isinstance(ns, int):
             ns = {
                 (ipt.id, a.id): ns
@@ -319,18 +310,16 @@ def create_prediction_pipeline(
     bioimageio_model: AnyModelDescr,
     *,
     devices: Optional[Sequence[str]] = None,
-    weight_format: Optional[WeightsFormat] = None,
-    weights_format: Optional[WeightsFormat] = None,
+    weight_format: Optional[SupportedWeightsFormat] = None,
+    weights_format: Optional[SupportedWeightsFormat] = None,
     dataset_for_initial_statistics: Iterable[Union[Sample, Sequence[Tensor]]] = tuple(),
     keep_updating_initial_dataset_statistics: bool = False,
     fixed_dataset_statistics: Mapping[DatasetMeasure, MeasureValue] = MappingProxyType(
         {}
     ),
     model_adapter: Optional[ModelAdapter] = None,
-    ns: Union[
-        v0_5.ParameterizedSize_N,
-        Mapping[Tuple[MemberId, AxisId], v0_5.ParameterizedSize_N],
-    ] = 10,
+    ns: Optional[BlocksizeParameter] = None,
+    default_blocksize_parameter: BlocksizeParameter = 10,
     **deprecated_kwargs: Any,
 ) -> PredictionPipeline:
     """
@@ -340,9 +329,33 @@ def create_prediction_pipeline(
     * model prediction
     * computation of output statistics
     * postprocessing
+
+    Args:
+        bioimageio_model: A bioimageio model description.
+        devices: (optional)
+        weight_format: deprecated in favor of **weights_format**
+        weights_format: (optional) Use a specific **weights_format** rather than
+            choosing one automatically.
+            A corresponding `bioimageio.core.model_adapters.ModelAdapter` will be
+            created to run inference with the **bioimageio_model**.
+        dataset_for_initial_statistics: (optional) If preprocessing steps require input
+            dataset statistics, **dataset_for_initial_statistics** allows you to
+            specifcy a dataset from which these statistics are computed.
+        keep_updating_initial_dataset_statistics: (optional) Set to `True` if you want
+            to update dataset statistics with each processed sample.
+        fixed_dataset_statistics: (optional) Allows you to specify a mapping of
+            `DatasetMeasure`s to precomputed `MeasureValue`s.
+        model_adapter: (optional) Allows you to use a custom **model_adapter** instead
+            of creating one according to the present/selected **weights_format**.
+        ns: deprecated in favor of **default_blocksize_parameter**
+        default_blocksize_parameter: Allows to control the default block size for
+            blockwise predictions, see `BlocksizeParameter`.
+
     """
     weights_format = weight_format or weights_format
     del weight_format
+    default_blocksize_parameter = ns or default_blocksize_parameter
+    del ns
     if deprecated_kwargs:
         warnings.warn(
             f"deprecated create_prediction_pipeline kwargs: {set(deprecated_kwargs)}"
@@ -377,5 +390,5 @@ def create_prediction_pipeline(
         model_adapter=model_adapter,
         preprocessing=preprocessing,
         postprocessing=postprocessing,
-        default_ns=ns,
+        default_blocksize_parameter=default_blocksize_parameter,
     )

@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import subprocess
-import warnings
 from itertools import chain
 from typing import Dict, List
 
 from loguru import logger
 from pytest import FixtureRequest, fixture
 
+from bioimageio.core import enable_determinism
 from bioimageio.spec import __version__ as bioimageio_spec_version
+
+enable_determinism()
+
 
 try:
     import torch
 
     torch_version = tuple(map(int, torch.__version__.split(".")[:2]))
-    logger.warning(f"detected torch version {torch_version}.x")
+    logger.warning("detected torch version {}", torch.__version__)
 except ImportError:
     torch = None
     torch_version = None
@@ -29,7 +32,7 @@ skip_onnx = onnxruntime is None
 try:
     import tensorflow  # type: ignore
 
-    tf_major_version = int(tensorflow.__version__.split(".")[0])  # type: ignore
+    tf_major_version = int(tensorflow.__version__.split(".")[0])
 except ImportError:
     tensorflow = None
     tf_major_version = None
@@ -41,56 +44,50 @@ except ImportError:
 
 skip_tensorflow = tensorflow is None
 
-warnings.warn(f"testing with bioimageio.spec {bioimageio_spec_version}")
+logger.warning("testing with bioimageio.spec {}", bioimageio_spec_version)
+
+EXAMPLE_DESCRIPTIONS = "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/"
 
 # TODO: use models from new collection on S3
 MODEL_SOURCES: Dict[str, str] = {
-    "hpa_densenet": (
-        "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/models/hpa-densenet/rdf.yaml"
-    ),
+    "hpa_densenet": "polite-pig/1.1",
     "stardist": (
-        "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/models"
-        "/stardist_example_model/v0_4.bioimageio.yaml"
+        EXAMPLE_DESCRIPTIONS + "models/stardist_example_model/v0_4.bioimageio.yaml"
     ),
     "shape_change": (
-        "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/models/"
-        "upsample_test_model/v0_4.bioimageio.yaml"
+        EXAMPLE_DESCRIPTIONS + "models/upsample_test_model/v0_4.bioimageio.yaml"
     ),
     "stardist_wrong_shape": (
-        "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/models/"
-        "stardist_example_model/rdf_wrong_shape.yaml"
+        EXAMPLE_DESCRIPTIONS + "models/stardist_example_model/rdf_wrong_shape.yaml"
     ),
     "stardist_wrong_shape2": (
-        "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/models/"
-        "stardist_example_model/rdf_wrong_shape2_v0_4.yaml"
+        EXAMPLE_DESCRIPTIONS
+        + "models/stardist_example_model/rdf_wrong_shape2_v0_4.yaml"
     ),
     "unet2d_diff_output_shape": (
-        "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/models/"
-        "unet2d_diff_output_shape/v0_4.bioimageio.yaml"
+        EXAMPLE_DESCRIPTIONS + "models/unet2d_diff_output_shape/v0_4.bioimageio.yaml"
     ),
     "unet2d_expand_output_shape": (
-        "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/models/"
-        "unet2d_nuclei_broad/expand_output_shape_v0_4.bioimageio.yaml"
+        EXAMPLE_DESCRIPTIONS
+        + "models/unet2d_nuclei_broad/expand_output_shape.bioimageio.yaml"
     ),
     "unet2d_fixed_shape": (
-        "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/models/"
-        "unet2d_fixed_shape/v0_4.bioimageio.yaml"
+        EXAMPLE_DESCRIPTIONS + "models/unet2d_fixed_shape/v0_4.bioimageio.yaml"
     ),
     "unet2d_keras_tf2": (
-        "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/models/"
-        "unet2d_keras_tf2/v0_4.bioimageio.yaml"
+        EXAMPLE_DESCRIPTIONS + "models/unet2d_keras_tf2/v0_4.bioimageio.yaml"
     ),
     "unet2d_keras": (
-        "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/models/"
-        "unet2d_keras_tf/v0_4.bioimageio.yaml"
+        EXAMPLE_DESCRIPTIONS + "models/unet2d_keras_tf/v0_4.bioimageio.yaml"
     ),
     "unet2d_multi_tensor": (
-        "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/models/"
-        "unet2d_multi_tensor/v0_4.bioimageio.yaml"
+        EXAMPLE_DESCRIPTIONS + "models/unet2d_multi_tensor/v0_4.bioimageio.yaml"
+    ),
+    "unet2d_nuclei_broad_model_old": (
+        EXAMPLE_DESCRIPTIONS + "models/unet2d_nuclei_broad/v0_4_9.bioimageio.yaml"
     ),
     "unet2d_nuclei_broad_model": (
-        "https://raw.githubusercontent.com/bioimage-io/spec-bioimage-io/main/example_descriptions/models/"
-        "unet2d_nuclei_broad/bioimageio.yaml"
+        EXAMPLE_DESCRIPTIONS + "models/unet2d_nuclei_broad/bioimageio.yaml"
     ),
 }
 
@@ -241,6 +238,14 @@ def unet2d_keras(request: FixtureRequest):
 # written as model group to automatically skip on missing torch
 @fixture(scope="session", params=[] if skip_torch else ["unet2d_nuclei_broad_model"])
 def unet2d_nuclei_broad_model(request: FixtureRequest):
+    return MODEL_SOURCES[request.param]
+
+
+# written as model group to automatically skip on missing torch
+@fixture(
+    scope="session", params=[] if skip_torch else ["unet2d_nuclei_broad_model_old"]
+)
+def unet2d_nuclei_broad_model_old(request: FixtureRequest):
     return MODEL_SOURCES[request.param]
 
 

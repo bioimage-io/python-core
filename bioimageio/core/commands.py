@@ -6,18 +6,19 @@ from typing import Optional, Sequence, Union
 
 from typing_extensions import Literal
 
+from bioimageio.core.common import SupportedWeightsFormat
 from bioimageio.spec import (
     InvalidDescr,
     ResourceDescr,
     save_bioimageio_package,
     save_bioimageio_package_as_folder,
 )
-from bioimageio.spec.model.v0_5 import WeightsFormat
+from bioimageio.spec import update_format as update_format
 
 from ._resource_tests import test_description
 
-WeightFormatArgAll = Literal[WeightsFormat, "all"]
-WeightFormatArgAny = Literal[WeightsFormat, "any"]
+WeightFormatArgAll = Literal[SupportedWeightsFormat, "all"]
+WeightFormatArgAny = Literal[SupportedWeightsFormat, "any"]
 
 
 def test(
@@ -25,45 +26,50 @@ def test(
     *,
     weight_format: WeightFormatArgAll = "all",
     devices: Optional[Union[str, Sequence[str]]] = None,
-    decimal: int = 4,
+    summary: Union[Path, Sequence[Path]] = (),
+    runtime_env: Union[
+        Literal["currently-active", "as-described"], Path
+    ] = "currently-active",
+    determinism: Literal["seed_only", "full"] = "seed_only",
 ) -> int:
-    """test a bioimageio resource
+    """Test a bioimageio resource.
 
-    Args:
-        source: Path or URL to the bioimageio resource description file
-                (bioimageio.yaml or rdf.yaml) or to a zipped resource
-        weight_format: (model only) The weight format to use
-        devices: Device(s) to use for testing
-        decimal: Precision for numerical comparisons
+    Arguments as described in `bioimageio.core.cli.TestCmd`
     """
     if isinstance(descr, InvalidDescr):
         descr.validation_summary.display()
         return 1
 
-    summary = test_description(
+    test_summary = test_description(
         descr,
         weight_format=None if weight_format == "all" else weight_format,
         devices=[devices] if isinstance(devices, str) else devices,
-        decimal=decimal,
+        runtime_env=runtime_env,
+        determinism=determinism,
     )
-    summary.display()
-    return 0 if summary.status == "passed" else 1
+    _ = test_summary.log(summary)
+    return 0 if test_summary.status == "passed" else 1
 
 
 def validate_format(
     descr: Union[ResourceDescr, InvalidDescr],
+    summary: Union[Path, Sequence[Path]] = (),
 ):
-    """validate the meta data format of a bioimageio resource
+    """DEPRECATED; Access the existing `validation_summary` attribute instead.
+    validate the meta data format of a bioimageio resource
 
     Args:
         descr: a bioimageio resource description
     """
-    descr.validation_summary.display()
+    _ = descr.validation_summary.log(summary)
     return 0 if descr.validation_summary.status == "passed" else 1
 
 
 def package(
-    descr: ResourceDescr, path: Path, *, weight_format: WeightFormatArgAll = "all"
+    descr: ResourceDescr,
+    path: Path,
+    *,
+    weight_format: WeightFormatArgAll = "all",
 ):
     """Save a resource's metadata with its associated files.
 
@@ -76,8 +82,12 @@ def package(
         weight-format: include only this single weight-format (if not 'all').
     """
     if isinstance(descr, InvalidDescr):
-        descr.validation_summary.display()
-        raise ValueError("resource description is invalid")
+        logged = descr.validation_summary.log()
+        msg = f"Invalid {descr.type} description."
+        if logged:
+            msg += f" Details saved to {logged}."
+
+        raise ValueError(msg)
 
     if weight_format == "all":
         weights_priority_order = None

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections.abc
 import importlib.util
 from itertools import chain
 from pathlib import Path
@@ -23,8 +24,7 @@ from loguru import logger
 from numpy.typing import NDArray
 from typing_extensions import Unpack, assert_never
 
-from bioimageio.spec._internal.io import resolve_and_extract
-from bioimageio.spec._internal.io_utils import HashKwargs
+from bioimageio.spec._internal.io import HashKwargs, resolve_and_extract
 from bioimageio.spec.common import FileSource
 from bioimageio.spec.model import AnyModelDescr, v0_4, v0_5
 from bioimageio.spec.model.v0_4 import CallableFromDepencency, CallableFromFile
@@ -35,7 +35,7 @@ from bioimageio.spec.model.v0_5 import (
 )
 from bioimageio.spec.utils import load_array
 
-from .axis import AxisId, AxisInfo, AxisLike, PerAxis
+from .axis import Axis, AxisId, AxisInfo, AxisLike, PerAxis
 from .block_meta import split_multiple_shapes_into_blocks
 from .common import Halo, MemberId, PerMember, SampleId, TotalNumberOfBlocks
 from .io import load_tensor
@@ -48,9 +48,16 @@ from .sample import (
 from .stat_measures import Stat
 from .tensor import Tensor
 
+TensorSource = Union[Tensor, xr.DataArray, NDArray[Any], Path]
+
 
 def import_callable(
-    node: Union[CallableFromDepencency, ArchitectureFromLibraryDescr],
+    node: Union[
+        ArchitectureFromFileDescr,
+        ArchitectureFromLibraryDescr,
+        CallableFromDepencency,
+        CallableFromFile,
+    ],
     /,
     **kwargs: Unpack[HashKwargs],
 ) -> Callable[..., Any]:
@@ -65,7 +72,6 @@ def import_callable(
         c = _import_from_file_impl(node.source_file, str(node.callable_name), **kwargs)
     elif isinstance(node, ArchitectureFromFileDescr):
         c = _import_from_file_impl(node.source, str(node.callable), sha256=node.sha256)
-
     else:
         assert_never(node)
 
@@ -100,14 +106,15 @@ def get_axes_infos(
     ],
 ) -> List[AxisInfo]:
     """get a unified, simplified axis representation from spec axes"""
-    return [
-        (
-            AxisInfo.create("i")
-            if isinstance(a, str) and a not in ("b", "i", "t", "c", "z", "y", "x")
-            else AxisInfo.create(a)
-        )
-        for a in io_descr.axes
-    ]
+    ret: List[AxisInfo] = []
+    for a in io_descr.axes:
+        if isinstance(a, v0_5.AxisBase):
+            ret.append(AxisInfo.create(Axis(id=a.id, type=a.type)))
+        else:
+            assert a in ("b", "i", "t", "c", "z", "y", "x")
+            ret.append(AxisInfo.create(a))
+
+    return ret
 
 
 def get_member_id(
@@ -308,7 +315,7 @@ def get_io_sample_block_metas(
 
 
 def get_tensor(
-    src: Union[Tensor, xr.DataArray, NDArray[Any], Path],
+    src: TensorSource,
     ipt: Union[v0_4.InputTensorDescr, v0_5.InputTensorDescr],
 ):
     """helper to cast/load various tensor sources"""
@@ -333,10 +340,7 @@ def create_sample_for_model(
     *,
     stat: Optional[Stat] = None,
     sample_id: SampleId = None,
-    inputs: Optional[
-        PerMember[Union[Tensor, xr.DataArray, NDArray[Any], Path]]
-    ] = None,  # TODO: make non-optional
-    **kwargs: NDArray[Any],  # TODO: deprecate in favor of `inputs`
+    inputs: Union[PerMember[TensorSource], TensorSource],
 ) -> Sample:
     """Create a sample from a single set of input(s) for a specific bioimage.io model
 
@@ -345,9 +349,17 @@ def create_sample_for_model(
         stat: dictionary with sample and dataset statistics (may be updated in-place!)
         inputs: the input(s) constituting a single sample.
     """
-    inputs = {MemberId(k): v for k, v in {**kwargs, **(inputs or {})}.items()}
 
     model_inputs = {get_member_id(d): d for d in model.inputs}
+    if isinstance(inputs, collections.abc.Mapping):
+        inputs = {MemberId(k): v for k, v in inputs.items()}
+    elif len(model_inputs) == 1:
+        inputs = {list(model_inputs)[0]: inputs}
+    else:
+        raise TypeError(
+            f"Expected `inputs` to be a mapping with keys {tuple(model_inputs)}"
+        )
+
     if unknown := {k for k in inputs if k not in model_inputs}:
         raise ValueError(f"Got unexpected inputs: {unknown}")
 

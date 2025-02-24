@@ -1,22 +1,14 @@
 import warnings
 from typing import Any, List, Optional, Sequence, Union
 
+import onnxruntime as rt
 from numpy.typing import NDArray
 
+from bioimageio.spec._internal.type_guards import is_list, is_tuple
 from bioimageio.spec.model import v0_4, v0_5
 from bioimageio.spec.utils import download
 
-from ..digest_spec import get_axes_infos
-from ..tensor import Tensor
-from ._model_adapter import ModelAdapter
-
-try:
-    import onnxruntime as rt
-except Exception as e:
-    rt = None
-    rt_error = str(e)
-else:
-    rt_error = None
+from ..model_adapters import ModelAdapter
 
 
 class ONNXModelAdapter(ModelAdapter):
@@ -26,14 +18,8 @@ class ONNXModelAdapter(ModelAdapter):
         model_description: Union[v0_4.ModelDescr, v0_5.ModelDescr],
         devices: Optional[Sequence[str]] = None,
     ):
-        if rt is None:
-            raise ImportError(f"failed to import onnxruntime: {rt_error}")
+        super().__init__(model_description=model_description)
 
-        super().__init__()
-        self._internal_output_axes = [
-            tuple(a.id for a in get_axes_infos(out))
-            for out in model_description.outputs
-        ]
         if model_description.weights.onnx is None:
             raise ValueError("No ONNX weights specified for {model_description.name}")
 
@@ -48,22 +34,18 @@ class ONNXModelAdapter(ModelAdapter):
                 f"Device management is not implemented for onnx yet, ignoring the devices {devices}"
             )
 
-    def forward(self, *input_tensors: Optional[Tensor]) -> List[Optional[Tensor]]:
-        assert len(input_tensors) == len(self._input_names)
-        input_arrays = [None if ipt is None else ipt.data.data for ipt in input_tensors]
-        result: Union[Sequence[Optional[NDArray[Any]]], Optional[NDArray[Any]]]
-        result = self._session.run(  # pyright: ignore[reportUnknownVariableType]
+    def _forward_impl(
+        self, input_arrays: Sequence[Optional[NDArray[Any]]]
+    ) -> List[Optional[NDArray[Any]]]:
+        result: Any = self._session.run(
             None, dict(zip(self._input_names, input_arrays))
         )
-        if isinstance(result, (list, tuple)):
-            result_seq: Sequence[Optional[NDArray[Any]]] = result
+        if is_list(result) or is_tuple(result):
+            result_seq = result
         else:
-            result_seq = [result]  # type: ignore
+            result_seq = [result]
 
-        return [
-            None if r is None else Tensor(r, dims=axes)
-            for r, axes in zip(result_seq, self._internal_output_axes)
-        ]
+        return result_seq  # pyright: ignore[reportReturnType]
 
     def unload(self) -> None:
         warnings.warn(

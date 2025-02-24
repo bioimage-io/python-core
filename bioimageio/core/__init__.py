@@ -41,6 +41,7 @@ from ._resource_tests import (
 )
 from ._settings import settings
 from .axis import Axis, AxisId
+from .backends import create_model_adapter
 from .block_meta import BlockMeta
 from .common import MemberId
 from .prediction import predict, predict_many
@@ -49,6 +50,7 @@ from .stat_calculators import compute_dataset_measures
 from .stat_measures import Stat
 from .tensor import Tensor
 from .utils import VERSION
+from .weight_converters import add_weights
 
 __version__ = VERSION
 
@@ -63,6 +65,7 @@ load_model = load_model_description
 
 __all__ = [
     "__version__",
+    "add_weights",
     "axis",
     "Axis",
     "AxisId",
@@ -73,6 +76,7 @@ __all__ = [
     "commands",
     "common",
     "compute_dataset_measures",
+    "create_model_adapter",
     "create_prediction_pipeline",
     "digest_spec",
     "dump_description",

@@ -275,6 +275,7 @@ functionality, but not any functionality depending on model prediction.
 To install additional deep learning libraries add `pytorch`, `onnxruntime`, `keras` or `tensorflow`.
 
 Deeplearning frameworks to consider installing alongside `bioimageio.core`:
+
 - [Pytorch/Torchscript](https://pytorch.org/get-started/locally/)
 - [TensorFlow](https://www.tensorflow.org/install)
 - [ONNXRuntime](https://onnxruntime.ai/docs/install/#python-installs)
@@ -297,13 +298,16 @@ These models are described by---and can be loaded with---the bioimageio.spec pac
 In addition bioimageio.core provides functionality to convert model weight formats.
 
 ### Documentation
+
 [Here you find the bioimageio.core documentation.](https://bioimage-io.github.io/core-bioimage-io-python/bioimageio/core.html)
 
 #### Presentations
+
 - [Create a model from scratch](https://bioimage-io.github.io/core-bioimage-io-python/presentations/create_ambitious_sloth.slides.html) ([source](https://github.com/bioimage-io/core-bioimage-io-python/tree/main/presentations))
 
 #### Examples
-<dl>    
+
+<dl>
   <dt>Notebooks that save and load resource descriptions and validate their format (using <a href="https://bioimage-io.github.io/core-bioimage-io-python/bioimageio/spec.html">bioimageio.spec</a>, a dependency of bioimageio.core)</dt>
   <dd><a href="https://github.com/bioimage-io/spec-bioimage-io/blob/main/example/load_model_and_create_your_own.ipynb">load_model_and_create_your_own.ipynb</a> <a target="_blank" href="https://colab.research.google.com/github/bioimage-io/spec-bioimage-io/blob/main/example/load_model_and_create_your_own.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -327,7 +331,6 @@ bioimageio
 
 For examples see [Get started](#get-started).
 
-
 ### CLI inputs from file
 
 For convenience the command line options (not arguments) may be given in a `bioimageio-cli.json`
@@ -342,7 +345,6 @@ blockwise: true
 stats: inputs/dataset_statistics.json
 ```
 
-
 ## Set up Development Environment
 
 To set up a development conda environment run the following commands:
@@ -355,14 +357,20 @@ pip install -e . --no-deps
 
 There are different environment files available that only install tensorflow or pytorch as dependencies, see [dev folder](https://github.com/bioimage-io/core-bioimage-io-python/tree/main/dev).
 
-
 ## Logging level
 
 `bioimageio.spec` and `bioimageio.core` use [loguru](https://github.com/Delgan/loguru) for logging, hence the logging level
 may be controlled with the `LOGURU_LEVEL` environment variable.
 
-
 ## Changelog
+
+### 0.7.1 (to be released)
+
+- breaking: removed `decimals` argument from bioimageio CLI and `bioimageio.core.commands.test()`
+- New feature: `bioimageio.core.test_description` accepts **runtime_env** and **run_command** to test a resource
+  using the conda environment described by that resource (or another specified conda env)
+- new CLI command: `bioimageio add-weights` (and utility function: bioimageio.core.add_weights)
+- removed `bioimageio.core.proc_ops.get_proc_class` in favor of `bioimageio.core.proc_ops.get_proc`
 
 ### 0.7.0
 

@@ -1,4 +1,4 @@
-from bioimageio.core.cli import Bioimageio
+from .cli import Bioimageio
 
 
 def main():

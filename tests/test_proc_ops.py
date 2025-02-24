@@ -105,6 +105,22 @@ def test_zero_mean_unit_variance_fixed(tid: MemberId):
     xr.testing.assert_allclose(expected, sample.members[tid].data, rtol=1e-5, atol=1e-7)
 
 
+def test_zero_mean_unit_variance_fixed2(tid: MemberId):
+    from bioimageio.core.proc_ops import FixedZeroMeanUnitVariance
+
+    np_data = np.arange(9).reshape(3, 3)
+    mean = float(np_data.mean())
+    std = float(np_data.mean())
+    eps = 1.0e-7
+    op = FixedZeroMeanUnitVariance(tid, tid, mean=mean, std=std, eps=eps)
+
+    data = xr.DataArray(np_data, dims=("x", "y"))
+    sample = Sample(members={tid: Tensor.from_xarray(data)}, stat={}, id=None)
+    expected = xr.DataArray((np_data - mean) / (std + eps), dims=("x", "y"))
+    op(sample)
+    xr.testing.assert_allclose(expected, sample.members[tid].data, rtol=1e-5, atol=1e-7)
+
+
 def test_zero_mean_unit_across_axes(tid: MemberId):
     from bioimageio.core.proc_ops import ZeroMeanUnitVariance
 
@@ -122,22 +138,6 @@ def test_zero_mean_unit_across_axes(tid: MemberId):
     expected = xr.concat(
         [(data[i : i + 1] - data[i].mean()) / data[i].std() for i in range(2)], dim="c"
     )
-    op(sample)
-    xr.testing.assert_allclose(expected, sample.members[tid].data, rtol=1e-5, atol=1e-7)
-
-
-def test_zero_mean_unit_variance_fixed2(tid: MemberId):
-    from bioimageio.core.proc_ops import FixedZeroMeanUnitVariance
-
-    np_data = np.arange(9).reshape(3, 3)
-    mean = float(np_data.mean())
-    std = float(np_data.mean())
-    eps = 1.0e-7
-    op = FixedZeroMeanUnitVariance(tid, tid, mean=mean, std=std, eps=eps)
-
-    data = xr.DataArray(np_data, dims=("x", "y"))
-    sample = Sample(members={tid: Tensor.from_xarray(data)}, stat={}, id=None)
-    expected = xr.DataArray((np_data - mean) / (std + eps), dims=("x", "y"))
     op(sample)
     xr.testing.assert_allclose(expected, sample.members[tid].data, rtol=1e-5, atol=1e-7)
 

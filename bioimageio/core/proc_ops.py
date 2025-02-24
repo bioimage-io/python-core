@@ -16,7 +16,11 @@ import numpy as np
 import xarray as xr
 from typing_extensions import Self, assert_never
 
+from bioimageio.core.digest_spec import get_member_id
 from bioimageio.spec.model import v0_4, v0_5
+from bioimageio.spec.model.v0_5 import (
+    _convert_proc,  # pyright: ignore [reportPrivateUsage]
+)
 
 from ._op_base import BlockedOperator, Operator
 from .axis import AxisId, PerAxis
@@ -51,11 +55,16 @@ def _convert_axis_ids(
     if mode == "per_sample":
         ret = []
     elif mode == "per_dataset":
-        ret = [AxisId("b")]
+        ret = [v0_5.BATCH_AXIS_ID]
     else:
         assert_never(mode)
 
-    ret.extend([AxisId(a) for a in axes])
+    ret.extend(
+        [
+            AxisId(v0_5._AXIS_ID_MAP.get(a, a))  # pyright: ignore[reportPrivateUsage]
+            for a in axes
+        ]
+    )
     return tuple(ret)
 
 
@@ -299,9 +308,15 @@ class ScaleLinear(_SimpleOperator):
         member_id: MemberId,
     ) -> Self:
         kwargs = descr.kwargs
-        if isinstance(kwargs, v0_5.ScaleLinearAlongAxisKwargs):
+        if isinstance(kwargs, v0_5.ScaleLinearKwargs):
+            axis = None
+        elif isinstance(kwargs, v0_5.ScaleLinearAlongAxisKwargs):
             axis = kwargs.axis
-        elif isinstance(kwargs, (v0_4.ScaleLinearKwargs, v0_5.ScaleLinearKwargs)):
+        elif isinstance(kwargs, v0_4.ScaleLinearKwargs):
+            if kwargs.axes is not None:
+                raise NotImplementedError(
+                    "model.v0_4.ScaleLinearKwargs with axes not implemented, please consider updating the model to v0_5."
+                )
             axis = None
         else:
             assert_never(kwargs)
@@ -657,34 +672,53 @@ Processing = Union[
 ]
 
 
-def get_proc_class(proc_spec: ProcDescr):
-    if isinstance(proc_spec, (v0_4.BinarizeDescr, v0_5.BinarizeDescr)):
-        return Binarize
-    elif isinstance(proc_spec, (v0_4.ClipDescr, v0_5.ClipDescr)):
-        return Clip
-    elif isinstance(proc_spec, v0_5.EnsureDtypeDescr):
-        return EnsureDtype
-    elif isinstance(proc_spec, v0_5.FixedZeroMeanUnitVarianceDescr):
-        return FixedZeroMeanUnitVariance
-    elif isinstance(proc_spec, (v0_4.ScaleLinearDescr, v0_5.ScaleLinearDescr)):
-        return ScaleLinear
+def get_proc(
+    proc_descr: ProcDescr,
+    tensor_descr: Union[
+        v0_4.InputTensorDescr,
+        v0_4.OutputTensorDescr,
+        v0_5.InputTensorDescr,
+        v0_5.OutputTensorDescr,
+    ],
+) -> Processing:
+    member_id = get_member_id(tensor_descr)
+
+    if isinstance(proc_descr, (v0_4.BinarizeDescr, v0_5.BinarizeDescr)):
+        return Binarize.from_proc_descr(proc_descr, member_id)
+    elif isinstance(proc_descr, (v0_4.ClipDescr, v0_5.ClipDescr)):
+        return Clip.from_proc_descr(proc_descr, member_id)
+    elif isinstance(proc_descr, v0_5.EnsureDtypeDescr):
+        return EnsureDtype.from_proc_descr(proc_descr, member_id)
+    elif isinstance(proc_descr, v0_5.FixedZeroMeanUnitVarianceDescr):
+        return FixedZeroMeanUnitVariance.from_proc_descr(proc_descr, member_id)
+    elif isinstance(proc_descr, (v0_4.ScaleLinearDescr, v0_5.ScaleLinearDescr)):
+        return ScaleLinear.from_proc_descr(proc_descr, member_id)
     elif isinstance(
-        proc_spec, (v0_4.ScaleMeanVarianceDescr, v0_5.ScaleMeanVarianceDescr)
+        proc_descr, (v0_4.ScaleMeanVarianceDescr, v0_5.ScaleMeanVarianceDescr)
     ):
-        return ScaleMeanVariance
-    elif isinstance(proc_spec, (v0_4.ScaleRangeDescr, v0_5.ScaleRangeDescr)):
-        return ScaleRange
-    elif isinstance(proc_spec, (v0_4.SigmoidDescr, v0_5.SigmoidDescr)):
-        return Sigmoid
+        return ScaleMeanVariance.from_proc_descr(proc_descr, member_id)
+    elif isinstance(proc_descr, (v0_4.ScaleRangeDescr, v0_5.ScaleRangeDescr)):
+        return ScaleRange.from_proc_descr(proc_descr, member_id)
+    elif isinstance(proc_descr, (v0_4.SigmoidDescr, v0_5.SigmoidDescr)):
+        return Sigmoid.from_proc_descr(proc_descr, member_id)
     elif (
-        isinstance(proc_spec, v0_4.ZeroMeanUnitVarianceDescr)
-        and proc_spec.kwargs.mode == "fixed"
+        isinstance(proc_descr, v0_4.ZeroMeanUnitVarianceDescr)
+        and proc_descr.kwargs.mode == "fixed"
     ):
-        return FixedZeroMeanUnitVariance
+        if not isinstance(
+            tensor_descr, (v0_4.InputTensorDescr, v0_4.OutputTensorDescr)
+        ):
+            raise TypeError(
+                "Expected v0_4 tensor description for v0_4 processing description"
+            )
+
+        v5_proc_descr = _convert_proc(proc_descr, tensor_descr.axes)
+        assert isinstance(v5_proc_descr, v0_5.FixedZeroMeanUnitVarianceDescr)
+        return FixedZeroMeanUnitVariance.from_proc_descr(v5_proc_descr, member_id)
     elif isinstance(
-        proc_spec,
+        proc_descr,
         (v0_4.ZeroMeanUnitVarianceDescr, v0_5.ZeroMeanUnitVarianceDescr),
     ):
-        return ZeroMeanUnitVariance
+        return ZeroMeanUnitVariance.from_proc_descr(proc_descr, member_id)
     else:
-        assert_never(proc_spec)
+        assert_never(proc_descr)

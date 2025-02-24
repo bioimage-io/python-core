@@ -1,4 +1,5 @@
 from typing import (
+    Callable,
     Iterable,
     List,
     Mapping,
@@ -11,15 +12,15 @@ from typing import (
 
 from typing_extensions import assert_never
 
+from bioimageio.core.digest_spec import get_member_id
 from bioimageio.spec.model import AnyModelDescr, v0_4, v0_5
-from bioimageio.spec.model.v0_5 import TensorId
 
-from .digest_spec import get_member_ids
 from .proc_ops import (
     AddKnownDatasetStats,
+    EnsureDtype,
     Processing,
     UpdateStats,
-    get_proc_class,
+    get_proc,
 )
 from .sample import Sample
 from .stat_calculators import StatsCalculator
@@ -45,11 +46,44 @@ class PreAndPostprocessing(NamedTuple):
     post: List[Processing]
 
 
+class _ProcessingCallables(NamedTuple):
+    pre: Callable[[Sample], None]
+    post: Callable[[Sample], None]
+
+
 class _SetupProcessing(NamedTuple):
     pre: List[Processing]
     post: List[Processing]
     pre_measures: Set[Measure]
     post_measures: Set[Measure]
+
+
+class _ApplyProcs:
+    def __init__(self, procs: Sequence[Processing]):
+        super().__init__()
+        self._procs = procs
+
+    def __call__(self, sample: Sample) -> None:
+        for op in self._procs:
+            op(sample)
+
+
+def get_pre_and_postprocessing(
+    model: AnyModelDescr,
+    *,
+    dataset_for_initial_statistics: Iterable[Sample],
+    keep_updating_initial_dataset_stats: bool = False,
+    fixed_dataset_stats: Optional[Mapping[DatasetMeasure, MeasureValue]] = None,
+) -> _ProcessingCallables:
+    """Creates callables to apply pre- and postprocessing in-place to a sample"""
+
+    setup = setup_pre_and_postprocessing(
+        model=model,
+        dataset_for_initial_statistics=dataset_for_initial_statistics,
+        keep_updating_initial_dataset_stats=keep_updating_initial_dataset_stats,
+        fixed_dataset_stats=fixed_dataset_stats,
+    )
+    return _ProcessingCallables(_ApplyProcs(setup.pre), _ApplyProcs(setup.post))
 
 
 def setup_pre_and_postprocessing(
@@ -60,7 +94,7 @@ def setup_pre_and_postprocessing(
 ) -> PreAndPostprocessing:
     """
     Get pre- and postprocessing operators for a `model` description.
-    userd in `bioimageio.core.create_prediction_pipeline"""
+    Used in `bioimageio.core.create_prediction_pipeline"""
     prep, post, prep_meas, post_meas = _prepare_setup_pre_and_postprocessing(model)
 
     missing_dataset_stats = {
@@ -136,65 +170,56 @@ def get_requried_sample_measures(model: AnyModelDescr) -> RequiredSampleMeasures
     )
 
 
+def _prepare_procs(
+    tensor_descrs: Union[
+        Sequence[v0_4.InputTensorDescr],
+        Sequence[v0_5.InputTensorDescr],
+        Sequence[v0_4.OutputTensorDescr],
+        Sequence[v0_5.OutputTensorDescr],
+    ],
+) -> List[Processing]:
+    procs: List[Processing] = []
+    for t_descr in tensor_descrs:
+        if isinstance(t_descr, (v0_4.InputTensorDescr, v0_4.OutputTensorDescr)):
+            member_id = get_member_id(t_descr)
+            procs.append(
+                EnsureDtype(input=member_id, output=member_id, dtype=t_descr.data_type)
+            )
+
+        if isinstance(t_descr, (v0_4.InputTensorDescr, v0_5.InputTensorDescr)):
+            for proc_d in t_descr.preprocessing:
+                procs.append(get_proc(proc_d, t_descr))
+        elif isinstance(t_descr, (v0_4.OutputTensorDescr, v0_5.OutputTensorDescr)):
+            for proc_d in t_descr.postprocessing:
+                procs.append(get_proc(proc_d, t_descr))
+        else:
+            assert_never(t_descr)
+
+        if isinstance(
+            t_descr,
+            (v0_4.InputTensorDescr, (v0_4.InputTensorDescr, v0_4.OutputTensorDescr)),
+        ) and not isinstance(procs[-1], EnsureDtype):
+            member_id = get_member_id(t_descr)
+            procs.append(
+                EnsureDtype(input=member_id, output=member_id, dtype=t_descr.data_type)
+            )
+
+    return procs
+
+
 def _prepare_setup_pre_and_postprocessing(model: AnyModelDescr) -> _SetupProcessing:
-    pre_measures: Set[Measure] = set()
-    post_measures: Set[Measure] = set()
-
-    input_ids = set(get_member_ids(model.inputs))
-    output_ids = set(get_member_ids(model.outputs))
-
-    def prepare_procs(tensor_descrs: Sequence[TensorDescr]):
-        procs: List[Processing] = []
-        for t_descr in tensor_descrs:
-            if isinstance(t_descr, (v0_4.InputTensorDescr, v0_5.InputTensorDescr)):
-                proc_descrs: List[
-                    Union[
-                        v0_4.PreprocessingDescr,
-                        v0_5.PreprocessingDescr,
-                        v0_4.PostprocessingDescr,
-                        v0_5.PostprocessingDescr,
-                    ]
-                ] = list(t_descr.preprocessing)
-            elif isinstance(
-                t_descr,
-                (v0_4.OutputTensorDescr, v0_5.OutputTensorDescr),
-            ):
-                proc_descrs = list(t_descr.postprocessing)
-            else:
-                assert_never(t_descr)
-
-            if isinstance(t_descr, (v0_4.InputTensorDescr, v0_4.OutputTensorDescr)):
-                ensure_dtype = v0_5.EnsureDtypeDescr(
-                    kwargs=v0_5.EnsureDtypeKwargs(dtype=t_descr.data_type)
-                )
-                if isinstance(t_descr, v0_4.InputTensorDescr) and proc_descrs:
-                    proc_descrs.insert(0, ensure_dtype)
-
-                proc_descrs.append(ensure_dtype)
-
-            for proc_d in proc_descrs:
-                proc_class = get_proc_class(proc_d)
-                member_id = (
-                    TensorId(str(t_descr.name))
-                    if isinstance(t_descr, v0_4.TensorDescrBase)
-                    else t_descr.id
-                )
-                req = proc_class.from_proc_descr(
-                    proc_d, member_id  # pyright: ignore[reportArgumentType]
-                )
-                for m in req.required_measures:
-                    if m.member_id in input_ids:
-                        pre_measures.add(m)
-                    elif m.member_id in output_ids:
-                        post_measures.add(m)
-                    else:
-                        raise ValueError("When to raise ")
-                procs.append(req)
-        return procs
+    if isinstance(model, v0_4.ModelDescr):
+        pre = _prepare_procs(model.inputs)
+        post = _prepare_procs(model.outputs)
+    elif isinstance(model, v0_5.ModelDescr):
+        pre = _prepare_procs(model.inputs)
+        post = _prepare_procs(model.outputs)
+    else:
+        assert_never(model)
 
     return _SetupProcessing(
-        pre=prepare_procs(model.inputs),
-        post=prepare_procs(model.outputs),
-        pre_measures=pre_measures,
-        post_measures=post_measures,
+        pre=pre,
+        post=post,
+        pre_measures={m for proc in pre for m in proc.required_measures},
+        post_measures={m for proc in post for m in proc.required_measures},
     )

@@ -1,6 +1,6 @@
 [tool.black]
 line-length = 88
-extend_exclude = "/presentations/"
+extend-exclude = "/presentations/"
 target-version = ["py38", "py39", "py310", "py311", "py312"]
 preview = true
 
@@ -39,7 +39,7 @@ typeCheckingMode = "strict"
 useLibraryCodeForTypes = true
 
 [tool.pytest.ini_options]
-addopts = "--cov=bioimageio --cov-report=xml -n auto --capture=no --doctest-modules --failed-first"
+addopts = "--cov=bioimageio --cov-report=xml --cov-append --capture=no --doctest-modules --failed-first"
 
 [tool.ruff]
 line-length = 88

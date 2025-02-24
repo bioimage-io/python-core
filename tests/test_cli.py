@@ -36,11 +36,23 @@ def run_subprocess(
         ],
         ["test", "unet2d_nuclei_broad_model"],
         ["predict", "--example", "unet2d_nuclei_broad_model"],
+        ["update-format", "unet2d_path_old_version"],
+        ["increase-weight-formats", "unet2d_nuclei_broad_model"],
     ],
 )
-def test_cli(args: List[str], unet2d_nuclei_broad_model: str):
+def test_cli(
+    args: List[str], unet2d_nuclei_broad_model: str, unet2d_nuclei_broad_model_old: str
+):
     resolved_args = [
-        str(unet2d_nuclei_broad_model) if arg == "unet2d_nuclei_broad_model" else arg
+        (
+            unet2d_nuclei_broad_model
+            if arg == "unet2d_nuclei_broad_model"
+            else (
+                unet2d_nuclei_broad_model_old
+                if arg == "unet2d_nuclei_broad_model_old"
+                else arg
+            )
+        )
         for arg in args
     ]
     ret = run_subprocess(["bioimageio", *resolved_args])

@@ -258,6 +258,7 @@ def split_shape_into_blocks(
         set(block_shape),
     )
     if any(shape[a] < block_shape[a] for a in block_shape):
+        # TODO: allow larger blockshape
         raise ValueError(f"shape {shape} is smaller than block shape {block_shape}")
 
     assert all(a in shape for a in halo), (tuple(shape), set(halo))

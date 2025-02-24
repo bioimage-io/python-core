@@ -1,39 +1,31 @@
 import os
-from typing import Any, List, Optional, Sequence, Union
+from typing import Any, Optional, Sequence, Union
 
 from loguru import logger
 from numpy.typing import NDArray
 
-from bioimageio.spec._internal.io_utils import download
+from bioimageio.spec._internal.io import download
+from bioimageio.spec._internal.type_guards import is_list, is_tuple
 from bioimageio.spec.model import v0_4, v0_5
 from bioimageio.spec.model.v0_5 import Version
 
 from .._settings import settings
 from ..digest_spec import get_axes_infos
-from ..tensor import Tensor
 from ._model_adapter import ModelAdapter
 
 os.environ["KERAS_BACKEND"] = settings.keras_backend
 
 # by default, we use the keras integrated with tensorflow
+# TODO: check if we should prefer keras
 try:
-    import tensorflow as tf  # pyright: ignore[reportMissingImports]
-    from tensorflow import (  # pyright: ignore[reportMissingImports]
-        keras,  # pyright: ignore[reportUnknownVariableType]
+    import tensorflow as tf
+    from tensorflow import (
+        keras,  # pyright: ignore[reportUnknownVariableType,reportAttributeAccessIssue]
     )
 
-    tf_version = Version(tf.__version__)  # pyright: ignore[reportUnknownArgumentType]
+    tf_version = Version(tf.__version__)
 except Exception:
-    try:
-        import keras  # pyright: ignore[reportMissingImports]
-    except Exception as e:
-        keras = None
-        keras_error = str(e)
-    else:
-        keras_error = None
-    tf_version = None
-else:
-    keras_error = None
+    import keras
 
 
 class KerasModelAdapter(ModelAdapter):
@@ -43,10 +35,7 @@ class KerasModelAdapter(ModelAdapter):
         model_description: Union[v0_4.ModelDescr, v0_5.ModelDescr],
         devices: Optional[Sequence[str]] = None,
     ) -> None:
-        if keras is None:
-            raise ImportError(f"failed to import keras: {keras_error}")
-
-        super().__init__()
+        super().__init__(model_description=model_description)
         if model_description.weights.keras_hdf5 is None:
             raise ValueError("model has not keras_hdf5 weights specified")
         model_tf_version = model_description.weights.keras_hdf5.tensorflow_version
@@ -84,22 +73,14 @@ class KerasModelAdapter(ModelAdapter):
             for out in model_description.outputs
         ]
 
-    def forward(self, *input_tensors: Optional[Tensor]) -> List[Optional[Tensor]]:
-        _result: Union[Sequence[NDArray[Any]], NDArray[Any]]
-        _result = self._network.predict(  # pyright: ignore[reportUnknownVariableType]
-            *[None if t is None else t.data.data for t in input_tensors]
-        )
-        if isinstance(_result, (tuple, list)):
-            result: Sequence[NDArray[Any]] = _result
+    def _forward_impl(  # pyright: ignore[reportUnknownParameterType]
+        self, input_arrays: Sequence[Optional[NDArray[Any]]]
+    ):
+        network_output = self._network.predict(*input_arrays)  # type: ignore
+        if is_list(network_output) or is_tuple(network_output):
+            return network_output
         else:
-            result = [_result]  # type: ignore
-
-        assert len(result) == len(self._output_axes)
-        ret: List[Optional[Tensor]] = []
-        ret.extend(
-            [Tensor(r, dims=axes) for r, axes, in zip(result, self._output_axes)]
-        )
-        return ret
+            return [network_output]  # pyright: ignore[reportUnknownVariableType]
 
     def unload(self) -> None:
         logger.warning(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil, floor
 from typing import (
+    Any,
     Callable,
     Dict,
     Generic,
@@ -14,6 +15,7 @@ from typing import (
 )
 
 import numpy as np
+from numpy.typing import NDArray
 from typing_extensions import Self
 
 from .axis import AxisId, PerAxis
@@ -42,20 +44,30 @@ from .tensor import Tensor
 
 @dataclass
 class Sample:
-    """A dataset sample"""
+    """A dataset sample.
+
+    A `Sample` has `members`, which allows to combine multiple tensors into a single
+    sample.
+    For example a `Sample` from a dataset with masked images may contain a
+    `MemberId("raw")` and `MemberId("mask")` image.
+    """
 
     members: Dict[MemberId, Tensor]
-    """the sample's tensors"""
+    """The sample's tensors"""
 
     stat: Stat
-    """sample and dataset statistics"""
+    """Sample and dataset statistics"""
 
     id: SampleId
-    """identifier within the sample's dataset"""
+    """Identifies the `Sample` within the dataset -- typically a number or a string."""
 
     @property
     def shape(self) -> PerMember[PerAxis[int]]:
         return {tid: t.sizes for tid, t in self.members.items()}
+
+    def as_arrays(self) -> Dict[str, NDArray[Any]]:
+        """Return sample as dictionary of arrays."""
+        return {str(m): t.data.to_numpy() for m, t in self.members.items()}
 
     def split_into_blocks(
         self,

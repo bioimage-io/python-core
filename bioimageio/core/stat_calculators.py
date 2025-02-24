@@ -26,6 +26,8 @@ from loguru import logger
 from numpy.typing import NDArray
 from typing_extensions import assert_never
 
+from bioimageio.spec.model.v0_5 import BATCH_AXIS_ID
+
 from .axis import AxisId, PerAxis
 from .common import MemberId
 from .sample import Sample
@@ -47,7 +49,7 @@ from .stat_measures import (
 from .tensor import Tensor
 
 try:
-    import crick
+    import crick  # pyright: ignore[reportMissingImports]
 
 except Exception:
     crick = None
@@ -120,7 +122,7 @@ class MeanVarStdCalculator:
 
     def __init__(self, member_id: MemberId, axes: Optional[Sequence[AxisId]]):
         super().__init__()
-        self._axes = None if axes is None else tuple(axes)
+        self._axes = None if axes is None else tuple(map(AxisId, axes))
         self._member_id = member_id
         self._n: int = 0
         self._mean: Optional[Tensor] = None
@@ -137,7 +139,7 @@ class MeanVarStdCalculator:
         else:
             n = int(np.prod([tensor.sizes[d] for d in self._axes]))
 
-        var = xr.dot(c, c, dims=self._axes) / n
+        var = xr.dot(c, c, dim=self._axes) / n
         assert isinstance(var, xr.DataArray)
         std = np.sqrt(var)
         assert isinstance(std, xr.DataArray)
@@ -152,6 +154,9 @@ class MeanVarStdCalculator:
         }
 
     def update(self, sample: Sample):
+        if self._axes is not None and BATCH_AXIS_ID not in self._axes:
+            return
+
         tensor = sample.members[self._member_id].astype("float64", copy=False)
         mean_b = tensor.mean(dim=self._axes)
         assert mean_b.dtype == "float64"
@@ -178,12 +183,16 @@ class MeanVarStdCalculator:
     def finalize(
         self,
     ) -> Dict[Union[DatasetMean, DatasetVar, DatasetStd], MeasureValue]:
-        if self._mean is None:
+        if (
+            self._axes is not None
+            and BATCH_AXIS_ID not in self._axes
+            or self._mean is None
+        ):
             return {}
         else:
             assert self._m2 is not None
             var = self._m2 / self._n
-            sqrt = np.sqrt(var)
+            sqrt = var**0.5
             if isinstance(sqrt, (int, float)):
                 # var and mean are scalar tensors, let's keep it consistent
                 sqrt = Tensor.from_xarray(xr.DataArray(sqrt))
@@ -306,7 +315,8 @@ class CrickPercentilesCalculator:
                     out_sizes[d] = s
 
         self._dims, self._shape = zip(*out_sizes.items())
-        d = int(np.prod(self._shape[1:]))  # type: ignore
+        assert self._shape is not None
+        d = int(np.prod(self._shape[1:]))
         self._digest = [TDigest() for _ in range(d)]
         self._indices = product(*map(range, self._shape[1:]))
 

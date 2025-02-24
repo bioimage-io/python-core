@@ -1,15 +1,4 @@
-from typing import Literal
-
-import pytest
-
-from bioimageio.spec import InvalidDescr
-
-
-@pytest.mark.parametrize("mode", ["seed_only", "full"])
-def test_enable_determinism(mode: Literal["seed_only", "full"]):
-    from bioimageio.core import enable_determinism
-
-    enable_determinism(mode)
+from bioimageio.spec import InvalidDescr, ValidationContext
 
 
 def test_error_for_wrong_shape(stardist_wrong_shape: str):
@@ -38,15 +27,10 @@ def test_error_for_wrong_shape2(stardist_wrong_shape2: str):
 def test_test_model(any_model: str):
     from bioimageio.core._resource_tests import test_model
 
-    summary = test_model(any_model)
-    assert summary.status == "passed", summary.format()
+    with ValidationContext(raise_errors=True):
+        summary = test_model(any_model)
 
-
-def test_test_resource(any_model: str):
-    from bioimageio.core._resource_tests import test_description
-
-    summary = test_description(any_model)
-    assert summary.status == "passed", summary.format()
+    assert summary.status == "passed", summary.display()
 
 
 def test_loading_description_multiple_times(unet2d_nuclei_broad_model: str):

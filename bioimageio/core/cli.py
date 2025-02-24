@@ -11,6 +11,7 @@ import sys
 from argparse import RawTextHelpFormatter
 from difflib import SequenceMatcher
 from functools import cached_property
+from io import StringIO
 from pathlib import Path
 from pprint import pformat, pprint
 from typing import (
@@ -18,6 +19,7 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Literal,
     Mapping,
     Optional,
     Sequence,
@@ -27,6 +29,7 @@ from typing import (
     Union,
 )
 
+import rich.markdown
 from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import (
@@ -43,8 +46,15 @@ from ruyaml import YAML
 from tqdm import tqdm
 from typing_extensions import assert_never
 
-from bioimageio.spec import AnyModelDescr, InvalidDescr, load_description
+from bioimageio.spec import (
+    AnyModelDescr,
+    InvalidDescr,
+    ResourceDescr,
+    load_description,
+    settings,
+)
 from bioimageio.spec._internal.io_basics import ZipPath
+from bioimageio.spec._internal.io_utils import write_yaml
 from bioimageio.spec._internal.types import NotEmpty
 from bioimageio.spec.dataset import DatasetDescr
 from bioimageio.spec.model import ModelDescr, v0_4, v0_5
@@ -56,9 +66,9 @@ from .commands import (
     WeightFormatArgAny,
     package,
     test,
-    validate_format,
+    update_format,
 )
-from .common import MemberId, SampleId
+from .common import MemberId, SampleId, SupportedWeightsFormat
 from .digest_spec import get_member_ids, load_sample_for_model
 from .io import load_dataset_stat, save_dataset_stat, save_sample
 from .prediction import create_prediction_pipeline
@@ -72,6 +82,7 @@ from .proc_setup import (
 from .sample import Sample
 from .stat_measures import Stat
 from .utils import VERSION
+from .weight_converters._add_weights import add_weights
 
 yaml = YAML(typ="safe")
 
@@ -82,6 +93,19 @@ class CmdBase(BaseModel, use_attribute_docstrings=True, cli_implicit_flags=True)
 
 class ArgMixin(BaseModel, use_attribute_docstrings=True, cli_implicit_flags=True):
     pass
+
+
+class WithSummaryLogging(ArgMixin):
+    summary: Union[Path, Sequence[Path]] = Field(
+        (), examples=[Path("summary.md"), Path("bioimageio_summaries/")]
+    )
+    """Save the validation summary as JSON, Markdown or HTML.
+    The format is chosen based on the suffix: `.json`, `.md`, `.html`.
+    If a folder is given (path w/o suffix) the summary is saved in all formats.
+    """
+
+    def log(self, descr: Union[ResourceDescr, InvalidDescr]):
+        _ = descr.validation_summary.log(self.summary)
 
 
 class WithSource(ArgMixin):
@@ -100,27 +124,39 @@ class WithSource(ArgMixin):
         """
         if isinstance(self.descr, InvalidDescr):
             return str(getattr(self.descr, "id", getattr(self.descr, "name")))
-        else:
-            return str(
-                (
-                    (bio_config := self.descr.config.get("bioimageio", {}))
-                    and isinstance(bio_config, dict)
-                    and bio_config.get("nickname")
-                )
-                or self.descr.id
-                or self.descr.name
-            )
+
+        nickname = None
+        if (
+            isinstance(self.descr.config, v0_5.Config)
+            and (bio_config := self.descr.config.bioimageio)
+            and bio_config.model_extra is not None
+        ):
+            nickname = bio_config.model_extra.get("nickname")
+
+        return str(nickname or self.descr.id or self.descr.name)
 
 
-class ValidateFormatCmd(CmdBase, WithSource):
-    """validate the meta data format of a bioimageio resource."""
+class ValidateFormatCmd(CmdBase, WithSource, WithSummaryLogging):
+    """Validate the meta data format of a bioimageio resource."""
+
+    perform_io_checks: bool = Field(
+        settings.perform_io_checks, alias="perform-io-checks"
+    )
+    """Wether or not to perform validations that requires downloading remote files.
+    Note: Default value is set by `BIOIMAGEIO_PERFORM_IO_CHECKS` environment variable.
+    """
+
+    @cached_property
+    def descr(self):
+        return load_description(self.source, perform_io_checks=self.perform_io_checks)
 
     def run(self):
-        sys.exit(validate_format(self.descr))
+        self.log(self.descr)
+        sys.exit(0 if self.descr.validation_summary.status == "passed" else 1)
 
 
-class TestCmd(CmdBase, WithSource):
-    """Test a bioimageio resource (beyond meta data formatting)"""
+class TestCmd(CmdBase, WithSource, WithSummaryLogging):
+    """Test a bioimageio resource (beyond meta data formatting)."""
 
     weight_format: WeightFormatArgAll = "all"
     """The weight format to limit testing to.
@@ -130,8 +166,19 @@ class TestCmd(CmdBase, WithSource):
     devices: Optional[Union[str, Sequence[str]]] = None
     """Device(s) to use for testing"""
 
-    decimal: int = 4
-    """Precision for numerical comparisons"""
+    runtime_env: Union[Literal["currently-active", "as-described"], Path] = Field(
+        "currently-active", alias="runtime-env"
+    )
+    """The python environment to run the tests in
+        - `"currently-active"`: use active Python interpreter
+        - `"as-described"`: generate a conda environment YAML file based on the model
+            weights description.
+        - A path to a conda environment YAML.
+          Note: The `bioimageio.core` dependency will be added automatically if not present.
+    """
+
+    determinism: Literal["seed_only", "full"] = "seed_only"
+    """Modes to improve reproducibility of test outputs."""
 
     def run(self):
         sys.exit(
@@ -139,13 +186,15 @@ class TestCmd(CmdBase, WithSource):
                 self.descr,
                 weight_format=self.weight_format,
                 devices=self.devices,
-                decimal=self.decimal,
+                summary=self.summary,
+                runtime_env=self.runtime_env,
+                determinism=self.determinism,
             )
         )
 
 
 class PackageCmd(CmdBase, WithSource):
-    """save a resource's metadata with its associated files."""
+    """Save a resource's metadata with its associated files."""
 
     path: CliPositionalArg[Path]
     """The path to write the (zipped) package to.
@@ -157,8 +206,10 @@ class PackageCmd(CmdBase, WithSource):
 
     def run(self):
         if isinstance(self.descr, InvalidDescr):
-            self.descr.validation_summary.display()
-            raise ValueError("resource description is invalid")
+            paths = self.descr.validation_summary.log()
+            raise ValueError(
+                f"Invalid {self.descr.type} description. Logged details to {paths}"
+            )
 
         sys.exit(
             package(
@@ -182,7 +233,7 @@ def _get_stat(
     req_dataset_meas, _ = get_required_dataset_measures(model_descr)
 
     if stats_path.exists():
-        logger.info(f"loading precomputed dataset measures from {stats_path}")
+        logger.info("loading precomputed dataset measures from {}", stats_path)
         stat = load_dataset_stat(stats_path)
         for m in req_dataset_meas:
             if m not in stat:
@@ -201,6 +252,26 @@ def _get_stat(
     save_dataset_stat(stat, stats_path)
 
     return stat
+
+
+class UpdateFormatCmd(CmdBase, WithSource):
+    """Update the metadata format"""
+
+    output: Optional[Path] = None
+    """Save updated bioimageio.yaml to this file.
+
+    Updated bioimageio.yaml is rendered to the terminal if the output is None.
+    """
+
+    def run(self):
+        updated = update_format(self.descr, output_path=self.output)
+        updated_stream = StringIO()
+        write_yaml(updated, updated_stream)
+        updated_md = f"```yaml\n{updated_stream.getvalue()}\n```"
+
+        rich_markdown = rich.markdown.Markdown(updated_md)
+        console = rich.console.Console()
+        console.print(rich_markdown)
 
 
 class PredictCmd(CmdBase, WithSource):
@@ -545,16 +616,49 @@ class PredictCmd(CmdBase, WithSource):
             save_sample(sp_out, sample_out)
 
 
+class ConvertWeightsCmd(CmdBase, WithSource):
+    output: CliPositionalArg[Path]
+    """The path to write the updated model package to."""
+
+    source_format: Optional[SupportedWeightsFormat] = Field(None, alias="source-format")
+    """Exclusively use these weights to convert to other formats."""
+
+    target_format: Optional[SupportedWeightsFormat] = Field(None, alias="target-format")
+    """Exclusively add this weight format."""
+
+    verbose: bool = False
+    """Log more (error) output."""
+
+    def run(self):
+        model_descr = ensure_description_is_model(self.descr)
+        if isinstance(model_descr, v0_4.ModelDescr):
+            raise TypeError(
+                f"model format {model_descr.format_version} not supported."
+                + " Please update the model first."
+            )
+        updated_model_descr = add_weights(
+            model_descr,
+            output_path=self.output,
+            source_format=self.source_format,
+            target_format=self.target_format,
+            verbose=self.verbose,
+        )
+        if updated_model_descr is None:
+            return
+
+        _ = updated_model_descr.validation_summary.log()
+
+
 JSON_FILE = "bioimageio-cli.json"
 YAML_FILE = "bioimageio-cli.yaml"
 
 
 class Bioimageio(
     BaseSettings,
+    cli_implicit_flags=True,
     cli_parse_args=True,
     cli_prog_name="bioimageio",
     cli_use_class_docs_for_groups=True,
-    cli_implicit_flags=True,
     use_attribute_docstrings=True,
 ):
     """bioimageio - CLI for bioimage.io resources 🦒"""
@@ -575,6 +679,13 @@ class Bioimageio(
 
     predict: CliSubCommand[PredictCmd]
     "Predict with a model resource"
+
+    update_format: CliSubCommand[UpdateFormatCmd] = Field(alias="update-format")
+    """Update the metadata format"""
+
+    add_weights: CliSubCommand[ConvertWeightsCmd] = Field(alias="add-weights")
+    """Add additional weights to the model descriptions converted from available
+    formats to improve deployability."""
 
     @classmethod
     def settings_customise_sources(
@@ -613,7 +724,14 @@ class Bioimageio(
             "executing CLI command:\n{}",
             pformat({k: v for k, v in self.model_dump().items() if v is not None}),
         )
-        cmd = self.validate_format or self.test or self.package or self.predict
+        cmd = (
+            self.validate_format
+            or self.test
+            or self.package
+            or self.predict
+            or self.update_format
+            or self.add_weights
+        )
         assert cmd is not None
         cmd.run()
 
